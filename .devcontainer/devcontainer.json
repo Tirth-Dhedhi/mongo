@@ -1,0 +1,25 @@
+{
+  "name": "MongoDB & Shell Codespace",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  
+  // Automate the installation of native utilities right as the Codespace loads
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:1": {
+      "configureZshAsDefaultShell": true
+    }
+  },
+
+  // Runs a sequence of terminal installation commands right after the container initializes
+  "postCreateCommand": "sudo apt-get update && wget -qO- https://www.mongodb.org/static/pgp/server-7.0.asc | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg && echo 'deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/7.0 multiverse' | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list && sudo apt-get update && sudo apt-get install -y mongodb-mongosh",
+
+  // Useful IDE personalizations for the virtual workspace
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "mongodb.mongodb-vscode" // Auto-installs the official MongoDB UI Extension in your browser/IDE
+      ]
+    }
+  }
+}

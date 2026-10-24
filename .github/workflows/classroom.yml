@@ -1,0 +1,184 @@
+name: Autograding Tests
+'on':
+  - push
+  - repository_dispatch
+  - workflow_dispatch
+
+permissions:
+  checks: write
+  actions: read
+  contents: write 
+
+jobs:
+  run-autograding-tests:
+    runs-on: ubuntu-latest
+    if: github.actor != 'grader-bot@github.com'
+    services:
+      mongodb:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+ 
+    - name: Restore Original Protected Files
+      run: |
+        PROTECTED_FILES="cleanup.js load_movies.js movies.js mongo_check_p7.js mongo_check_p8.js mongo_check_p9.js mongo_check_p10.js"
+        TEMPLATE_REPO="mongo"
+        
+        echo "Restoring protected files from instructor template..."
+    
+        for FILE in $PROTECTED_FILES; do
+          echo " -> Restoring $FILE"
+    
+          curl -fsSL \
+            -H "Authorization: token ${{ secrets.READ_TOKEN }}" \
+            "https://raw.githubusercontent.com/${{ github.repository_owner }}/${TEMPLATE_REPO}/main/${FILE}" \
+            -o "$FILE" || {
+              echo "ERROR: Failed to restore $FILE"
+              exit 1
+            }
+        done
+    
+        echo "All protected files restored successfully."
+
+
+    - name: Run Validation Tests
+      id: run-tests
+      run: |
+        sudo apt-get update
+        wget -qO- https://www.mongodb.org/static/pgp/server-7.0.asc | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg
+        echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+        sudo apt-get update
+        sudo apt-get install -y mongodb-mongosh
+        
+        GLOBAL_SCORE=0
+        GLOBAL_ANY_FAILED=false
+        GLOBAL_BREAKDOWN=""
+
+        check_problem() {
+          local label="$1"
+          local cmd="$2"
+
+          echo "=== Running $label ==="
+          if eval "$cmd"; then
+            GLOBAL_SCORE=$((GLOBAL_SCORE+1))
+            echo "$label: PASSED"
+            GLOBAL_BREAKDOWN="$GLOBAL_BREAKDOWN\n* $label: Passed (1 pt)"
+          else
+            echo "$label: FAILED"
+            GLOBAL_ANY_FAILED=true
+            GLOBAL_BREAKDOWN="$GLOBAL_BREAKDOWN\n* $label: Failed (0 pts)"
+          fi
+        }
+
+        check_output_problem() {
+          local label="$1"
+          local student_command="$2"
+          local expected_file_name="$3"
+
+          echo "=== Running $label ==="
+          
+          local BASE_URL="https://raw.githubusercontent.com/${{ github.repository_owner }}/outputs/main"
+          local raw_expected
+          raw_expected=$(curl -sSL -H "Authorization: token ${{ secrets.READ_TOKEN }}" "$BASE_URL/$expected_file_name")
+
+          local raw_student
+          raw_student=$(eval "$student_command" 2>&1 || true)
+          echo "$raw_student"
+
+          local clean_expected
+          clean_expected=$(echo "$raw_expected" | tr -d '\r' | awk '{$1=$1;print}')
+
+          local clean_student
+          clean_student=$(echo "$raw_student" | tr -d '\r' | awk '{$1=$1;print}')
+
+          if [ "$clean_student" = "$clean_expected" ]; then
+            GLOBAL_SCORE=$((GLOBAL_SCORE+1))
+            echo "$label: PASSED"
+            GLOBAL_BREAKDOWN="$GLOBAL_BREAKDOWN\n* $label: Passed (1 pt)"
+          else
+            echo "$label: FAILED"
+            GLOBAL_ANY_FAILED=true
+            GLOBAL_BREAKDOWN="$GLOBAL_BREAKDOWN\n* $label: Failed (0 pts)"
+            echo "   -> Error: Your program output content did not match the expected results."
+          fi
+        }
+
+        check_output_problem "Problem 1" "mongosh load_movies.js mongo_p1.js cleanup.js" "mongo_p1.out"
+        check_output_problem "Problem 2" "mongosh load_movies.js mongo_p2.js cleanup.js" "mongo_p2.out"
+        check_output_problem "Problem 3" "mongosh load_movies.js mongo_p3.js cleanup.js" "mongo_p3.out"
+        check_output_problem "Problem 4" "mongosh load_movies.js mongo_p4.js cleanup.js" "mongo_p4.out"
+        check_output_problem "Problem 5" "mongosh load_movies.js mongo_p5.js cleanup.js" "mongo_p5.out"
+        check_output_problem "Problem 6" "mongosh load_movies.js mongo_p6.js cleanup.js" "mongo_p6.out"
+        check_output_problem "Problem 7" "mongosh load_movies.js mongo_p7.js mongo_check_p7.js cleanup.js" "mongo_p7.out"
+        check_output_problem "Problem 8" "mongosh load_movies.js mongo_p8.js mongo_check_p8.js cleanup.js" "mongo_p8.out"
+        check_output_problem "Problem 9" "mongosh load_movies.js mongo_p9.js mongo_check_p9.js cleanup.js" "mongo_p9.out"
+        check_output_problem "Problem 10" "mongosh load_movies.js mongo_p10.js mongo_check_p10.js cleanup.js" "mongo_p10.out"
+
+        echo "FINAL_SCORE=$GLOBAL_SCORE" >> $GITHUB_ENV
+        echo "ANY_FAILED=$GLOBAL_ANY_FAILED" >> $GITHUB_ENV
+        
+        echo "SCORE_BREAKDOWN<<EOF" >> $GITHUB_ENV
+        echo -e "$GLOBAL_BREAKDOWN" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+
+        echo "Calculated Total Score: $GLOBAL_SCORE"
+
+    - name: Record Grade and Push
+      if: always() 
+      run: |
+        SOURCE_SHA="${{ github.sha }}"
+
+        git stash push --include-untracked || true
+        git fetch origin grades || true
+
+        if git show-ref --verify --quiet refs/remotes/origin/grades; then
+          git checkout -B grades origin/grades
+        else
+          git checkout --orphan grades
+          git rm -rf . || true
+        fi
+
+        if [ -z "$FINAL_SCORE" ]; then
+          FINAL_SCORE=0
+        fi
+
+        echo "$FINAL_SCORE" > grade.txt
+
+        git config user.name "Autograding Bot"
+        git config user.email "grader-bot@github.com"
+
+        git add grade.txt
+
+        git commit --allow-empty \
+          -m "Automated Grade: ${FINAL_SCORE}" \
+          -m "Source commit: ${SOURCE_SHA}"
+
+        git push origin HEAD:grades
+
+    - name: Display Assignment Summary
+      if: always()
+      run: |
+        DISPLAY_SCORE="${FINAL_SCORE:-0}"
+        
+        echo "### Autograder Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "#### Total Points Earned: **$DISPLAY_SCORE**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Itemized Breakdown:" >> $GITHUB_STEP_SUMMARY
+        
+        echo -e "$SCORE_BREAKDOWN" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+    - name: Check Final Status
+      if: always()
+      run: |
+        if [ "$ANY_FAILED" = "true" ]; then
+          echo "One or more validation tests failed. Check the logs above for details."
+          exit 1
+        else
+          echo "All tests passed cleanly!"
+          exit 0
+        fi

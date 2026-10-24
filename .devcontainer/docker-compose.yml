@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  # The primary workspace container where you write code and run commands
+  app:
+    image: mcr.microsoft.com/devcontainers/base:ubuntu
+    volumes:
+      - ..:/workspace:cached
+    # Keeps the container running in the background
+    command: sleep infinity
+    network_mode: service:db
+
+  # The background MongoDB service container
+  db:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
